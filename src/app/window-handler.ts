@@ -21,7 +21,7 @@ import { getCommandLineArgs, getGuid } from '../common/utils';
 import { notification } from '../renderer/notification';
 import { AppMenu } from './app-menu';
 import { handleChildWindow } from './child-window-handler';
-import { ClientSwitchType, CloudConfigDataTypes, config, IConfig, IGlobalConfig } from './config-handler';
+import { CloudConfigDataTypes, config, IConfig, IGlobalConfig } from './config-handler';
 import { SpellChecker } from './spell-check-handler';
 import { checkIfBuildExpired } from './ttl-handler';
 import { versionHandler } from './version-handler';
@@ -39,6 +39,14 @@ import {
     reloadWindow,
     windowExists,
 } from './window-utils';
+
+const windowSize: string | null = getCommandLineArgs(process.argv, '--window-size', false);
+
+enum ClientSwitchType {
+    CLIENT_1_5 = 'CLIENT_1_5',
+    CLIENT_2_0 = 'CLIENT_2_0',
+    CLIENT_2_0_DAILY = 'CLIENT_2_0_DAILY',
+}
 
 interface ICustomBrowserWindowConstructorOpts extends Electron.BrowserWindowConstructorOptions {
     winKey: string;
@@ -77,13 +85,15 @@ export class WindowHandler {
     public isOnline: boolean;
     public url: string | undefined;
     public startUrl!: string;
-    public currentClient: ClientSwitchType = ClientSwitchType.CLIENT_1_5;
+    public isMana: boolean = false;
     public willQuitApp: boolean = false;
     public spellchecker: SpellChecker | undefined;
     public isCustomTitleBar: boolean;
     public isWebPageLoading: boolean = true;
     public screenShareIndicatorFrameUtil: string;
+    public shouldShowWelcomeScreen: boolean = false;
 
+    private readonly defaultPodUrl: string = 'https://[POD].symphony.com';
     private readonly contextIsolation: boolean;
     private readonly backgroundThrottling: boolean;
     private readonly windowOpts: ICustomBrowserWindowConstructorOpts;
@@ -93,7 +103,6 @@ export class WindowHandler {
     // Window reference
     private readonly windows: object;
 
-    private shouldShowWelcomeScreen: boolean = false;
     private loadFailError: string | undefined;
     private mainWindow: ICustomBrowserWindow | null = null;
     private aboutAppWindow: Electron.BrowserWindow | null = null;
@@ -108,7 +117,7 @@ export class WindowHandler {
         this.config = config.getConfigFields([ 'isCustomTitleBar', 'mainWinPos', 'minimizeOnClose', 'notificationSettings', 'alwaysOnTop', 'locale', 'customFlags', 'clientSwitch' ]);
         logger.info(`window-handler: main windows initialized with following config data`, this.config);
 
-        this.globalConfig = config.getGlobalConfigFields([ 'url', 'contextIsolation' ]);
+        this.globalConfig = config.getGlobalConfigFields([ 'url', 'contextIsolation', 'contextOriginUrl' ]);
         this.userConfig = config.getUserConfigFields([ 'url' ]);
 
         const { customFlags } = this.config;
@@ -164,7 +173,6 @@ export class WindowHandler {
      */
     public async createApplication() {
 
-        await this.updateVersionInfo();
         this.spellchecker = new SpellChecker();
         logger.info(`window-handler: initialized spellchecker module with locale ${this.spellchecker.locale}`);
 
@@ -175,8 +183,9 @@ export class WindowHandler {
         this.url = WindowHandler.getValidUrl(this.userConfig.url ? this.userConfig.url : this.globalConfig.url);
         logger.info(`window-handler: setting url ${this.url} from config file!`);
 
-        if (this.globalConfig.url.startsWith('https://my.symphony.com') && !this.userConfig.url) {
+        if (config.isFirstTimeLaunch() && this.globalConfig.url.indexOf('https://my.symphony.com') >= 0) {
             this.shouldShowWelcomeScreen = true;
+            this.url = this.defaultPodUrl;
             isMaximized = false;
             isFullScreen = false;
             DEFAULT_HEIGHT = 333;
@@ -184,6 +193,36 @@ export class WindowHandler {
             this.windowOpts.resizable = false;
             this.windowOpts.maximizable = false;
             this.windowOpts.fullscreenable = false;
+
+            if (this.config.mainWinPos && this.config.mainWinPos.height) {
+                this.config.mainWinPos.height = DEFAULT_HEIGHT;
+            }
+
+            if (this.config.mainWinPos && this.config.mainWinPos.width) {
+                this.config.mainWinPos.width = DEFAULT_WIDTH;
+            }
+
+            if (this.config.mainWinPos && this.config.mainWinPos.x) {
+                this.config.mainWinPos.x = undefined;
+            }
+
+            if (this.config.mainWinPos && this.config.mainWinPos.y) {
+                this.config.mainWinPos.y = undefined;
+            }
+        }
+
+        logger.info('window-handler: windowSize: ' + JSON.stringify(windowSize));
+        if (windowSize) {
+            const args = windowSize.split('=');
+            const sizes = args[1].split(',');
+            logger.info('window-handler: windowSize: args: ' + JSON.stringify(args));
+            logger.info('window-handler: windowSize: sizes: ' + JSON.stringify(sizes));
+            DEFAULT_WIDTH = Number(sizes[0]);
+            DEFAULT_HEIGHT = Number(sizes[1]);
+            if (this.config.mainWinPos ) {
+                this.config.mainWinPos.width = DEFAULT_WIDTH;
+                this.config.mainWinPos.height = DEFAULT_HEIGHT;
+            }
         }
 
         // set window opts with additional config
@@ -249,12 +288,15 @@ export class WindowHandler {
         if (this.shouldShowWelcomeScreen) {
             this.handleWelcomeScreen();
         }
+
         // loads the main window with url from config/cmd line
         this.mainWindow.loadURL(this.url);
         // check for build expiry in case of test builds
         this.checkExpiry(this.mainWindow);
+        // update version info from server
+        this.updateVersionInfo();
         // need this for postMessage origin
-        this.mainWindow.origin = this.globalConfig.url;
+        this.mainWindow.origin = this.globalConfig.contextOriginUrl || this.url;
 
         // Event needed to hide native menu bar on Windows 10 as we use custom menu bar
         this.mainWindow.webContents.once('did-start-loading', () => {
@@ -264,7 +306,7 @@ export class WindowHandler {
             }
             // monitors network connection and
             // displays error banner on failure
-            monitorNetworkInterception();
+            monitorNetworkInterception(this.url || this.userConfig.url || this.globalConfig.url);
         });
 
         this.mainWindow.webContents.on('did-finish-load', async () => {
@@ -275,13 +317,14 @@ export class WindowHandler {
                 return;
             }
             this.url = this.mainWindow.webContents.getURL();
-
-            logger.info(`window-handler: client switch from config is ${this.config.clientSwitch}`);
-
-            const parsedUrl = parse(this.url);
-            if (this.url.startsWith('https://corporate.symphony.com') && this.url.indexOf(`https://${parsedUrl.hostname}/client/index.html`) !== -1) {
-                this.switchClient(this.config.clientSwitch ? this.config.clientSwitch : ClientSwitchType.CLIENT_2_0);
+            logger.info('window-handler: did-finish-load, url: ' + this.url);
+            const manaPath = 'client-bff';
+            if (this.url.includes(manaPath)) {
+                this.isMana = true;
+            } else {
+                this.isMana = false;
             }
+            logger.info('window-handler: isMana: ' + this.isMana);
 
             // Injects custom title bar and snack bar css into the webContents
             await injectStyles(this.mainWindow, this.isCustomTitleBar);
@@ -315,7 +358,7 @@ export class WindowHandler {
                         if (this.mainWindow && windowExists(this.mainWindow)) {
                             this.mainWindow.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', '/renderer/styles/network-error.css'), 'utf8').toString());
                             this.mainWindow.webContents.send('network-error', {error: this.loadFailError});
-                            isSymphonyReachable(this.mainWindow);
+                            isSymphonyReachable(this.mainWindow, this.url || this.userConfig.url || this.globalConfig.url);
                         }
                     }
                 } catch (error) {
@@ -342,6 +385,25 @@ export class WindowHandler {
             response === 0 ? this.mainWindow.reload() : this.mainWindow.close();
         });
 
+        this.mainWindow.webContents.on('console-message', (_event, level, message, _line, _sourceId) => {
+            const { enableRendererLogs } = config.getConfigFields([ 'enableRendererLogs' ]);
+            if (enableRendererLogs) {
+                if (this.mainWindow) {
+                    if (level === 0) {
+                        logger.debug('renderer ' + this.mainWindow.winName + ': ' + message);
+                    } else if (level === 1) {
+                        logger.info('renderer ' + this.mainWindow.winName + ': ' + message);
+                    } else if (level === 2) {
+                        logger.warn('renderer ' + this.mainWindow.winName + ': ' + message);
+                    } else if (level === 3) {
+                        logger.error('renderer ' + this.mainWindow.winName + ': ' + message);
+                    } else {
+                        logger.info('renderer ' + this.mainWindow.winName + ': ' + message);
+                    }
+                }
+            }
+        });
+
         // Handle main window close
         this.mainWindow.on('close', (event) => {
             if (!this.mainWindow || !windowExists(this.mainWindow)) {
@@ -350,6 +412,9 @@ export class WindowHandler {
 
             if (this.willQuitApp) {
                 logger.info(`window-handler: app is quitting, destroying all windows!`);
+                if (this.mainWindow && this.mainWindow.webContents.isDevToolsOpened()) {
+                    this.mainWindow.webContents.closeDevTools();
+                }
                 return this.destroyAllWindows();
             }
 
@@ -374,6 +439,7 @@ export class WindowHandler {
             if (isWindowsOS || isMac) {
                 this.execCmd(this.screenShareIndicatorFrameUtil, []);
             }
+            this.closeAllWindow();
             this.destroyAllWindows();
         });
 
@@ -409,6 +475,7 @@ export class WindowHandler {
 
         // Handle pop-outs window
         handleChildWindow(this.mainWindow.webContents);
+
         return this.mainWindow;
     }
 
@@ -422,7 +489,7 @@ export class WindowHandler {
             return;
         }
 
-        if (this.url.startsWith('https://my.symphony.com')) {
+        if (this.url.startsWith(this.defaultPodUrl)) {
             this.url = format({
                 pathname: require.resolve('../renderer/react-window.html'),
                 protocol: 'file',
@@ -439,13 +506,26 @@ export class WindowHandler {
                 return;
             }
             if (this.url.indexOf('welcome')) {
-                this.mainWindow.webContents.send('page-load-welcome', { locale: i18n.getLocale(), resource: i18n.loadedResources });
-                this.mainWindow.webContents.send('welcome', { url: this.startUrl, message: '', urlValid: true, sso: false });
+                this.mainWindow.webContents.send('page-load-welcome', {
+                    locale: i18n.getLocale(),
+                    resource: i18n.loadedResources,
+                });
+                const userConfigUrl = this.userConfig.url
+                && this.userConfig.url.indexOf('/login/sso/initsso') > -1 ?
+                    this.userConfig.url.slice(0, this.userConfig.url.indexOf('/login/sso/initsso'))
+                    : this.userConfig.url;
+
+                this.mainWindow.webContents.send('welcome', {
+                    url: userConfigUrl || this.startUrl,
+                    message: '',
+                    urlValid: !!userConfigUrl,
+                    sso: false,
+                });
             }
         });
 
         ipcMain.on('set-pod-url', async (_event, newPodUrl: string) => {
-            await config.updateUserConfig({url: newPodUrl, mainWinPos: { ...this.mainWindow!.getPosition(), ...{ height: 900, width: 900 } } });
+            await config.updateUserConfig({url: newPodUrl});
             app.relaunch();
             app.exit();
         });
@@ -488,14 +568,14 @@ export class WindowHandler {
 
                     if (browserWindow && windowExists(browserWindow)) {
                         browserWindow.destroy();
-
-                        if (isWindowsOS || isMac) {
-                            this.execCmd(this.screenShareIndicatorFrameUtil, []);
-                        } else {
-                            if (this.screenSharingFrameWindow && windowExists(this.screenSharingFrameWindow)) {
-                                this.screenSharingFrameWindow.close();
-                            }
-                        }
+                    }
+                }
+                if (isWindowsOS || isMac) {
+                    const timeoutValue = 300;
+                    setTimeout(() => this.execCmd(this.screenShareIndicatorFrameUtil, []), timeoutValue);
+                } else {
+                    if (this.screenSharingFrameWindow && windowExists(this.screenSharingFrameWindow)) {
+                        this.screenSharingFrameWindow.close();
                     }
                 }
                 break;
@@ -521,7 +601,11 @@ export class WindowHandler {
                 if (browserWindow && windowExists(browserWindow)) {
                     // Closes only child windows
                     if (browserWindow.winName !== apiName.mainWindowName && browserWindow.winName !== apiName.notificationWindowName) {
-                        browserWindow.close();
+                        if (browserWindow.closable) {
+                            browserWindow.close();
+                        } else {
+                            browserWindow.destroy();
+                        }
                     }
                 }
             });
@@ -628,7 +712,22 @@ export class WindowHandler {
         this.aboutAppWindow = createComponentWindow('about-app', opts);
         this.moveWindow(this.aboutAppWindow);
         this.aboutAppWindow.setVisibleOnAllWorkspaces(true);
+
         this.aboutAppWindow.webContents.once('did-finish-load', async () => {
+            let client = '';
+            if (this.url && this.url.startsWith('https://corporate.symphony.com')) {
+                const manaPath = 'client-bff';
+                const daily = 'daily';
+                if (this.url.includes(manaPath)) {
+                    if (this.url.includes(daily)) {
+                        client = 'Symphony 2.0 - Daily';
+                    } else {
+                        client = 'Symphony 2.0';
+                    }
+                } else {
+                    client = 'Symphony Classic';
+                }
+            }
             const ABOUT_SYMPHONY_NAMESPACE = 'AboutSymphony';
             const versionLocalised = i18n.t('Version', ABOUT_SYMPHONY_NAMESPACE)();
             const { hostname } = parse(this.url || this.globalConfig.url);
@@ -643,11 +742,9 @@ export class WindowHandler {
                 cloudConfig,
                 finalConfig,
                 hostname,
-                buildNumber: versionHandler.versionInfo.buildNumber,
-                clientVersion: versionHandler.versionInfo.clientVersion,
-                sfeVersion: versionHandler.versionInfo.sfeVersion,
                 versionLocalised,
                 ...versionHandler.versionInfo,
+                client,
             };
             if (this.aboutAppWindow && windowExists(this.aboutAppWindow)) {
                 this.aboutAppWindow.webContents.send('about-app-data', aboutInfo);
@@ -694,12 +791,17 @@ export class WindowHandler {
 
             this.screenPickerWindow.webContents.setZoomFactor(1);
             this.screenPickerWindow.webContents.setVisualZoomLevelLimits(1, 1);
-            this.screenPickerWindow.webContents.setLayoutZoomLevelLimits(0, 0);
 
             this.screenPickerWindow.webContents.send('screen-picker-data', {sources, id});
             this.addWindow(opts.winKey, this.screenPickerWindow);
         });
         ipcMain.once('screen-source-selected', (_event, source) => {
+            const displays = electron.screen.getAllDisplays();
+            logger.info('window-utils: displays.length: ' + displays.length);
+            for (let i = 0, len = displays.length; i < len; i++) {
+                logger.info('window-utils: display[' + i + ']: ' + JSON.stringify(displays[ i ]));
+            }
+
             if (source != null) {
                 logger.info(`window-handler: screen-source-selected`, source, id);
                 if (isWindowsOS || isMac) {
@@ -715,7 +817,11 @@ export class WindowHandler {
                         if (source.display_id !== '') {
                             this.execCmd(this.screenShareIndicatorFrameUtil, [ source.display_id ]);
                         } else {
-                            this.execCmd(this.screenShareIndicatorFrameUtil, [ '0' ]);
+                            const dispId = source.id.split(':')[1];
+                            const keyId = 'id';
+                            logger.info('window-utils: dispId: ' + dispId);
+                            logger.info('window-utils: displays [' + dispId + '] [id]: ' + displays [dispId] [ keyId ]);
+                            this.execCmd(this.screenShareIndicatorFrameUtil, [ displays [dispId] [ keyId ].toString() ]);
                         }
                     }
                 }
@@ -895,6 +1001,7 @@ export class WindowHandler {
                 minimizable: false,
                 maximizable: false,
                 title: 'Screen Sharing Indicator - Symphony',
+                closable: false,
             }, {
                 devTools: false,
             }), ...{winKey: streamId},
@@ -928,6 +1035,7 @@ export class WindowHandler {
         this.moveWindow(this.screenSharingIndicatorWindow, topPositionOfIndicatorScreen);
         this.screenSharingIndicatorWindow.setVisibleOnAllWorkspaces(true);
         this.screenSharingIndicatorWindow.setSkipTaskbar(true);
+        this.screenSharingIndicatorWindow.setAlwaysOnTop(true, 'screen-saver');
         this.screenSharingIndicatorWindow.webContents.once('did-finish-load', () => {
             if (!this.screenSharingIndicatorWindow || !windowExists(this.screenSharingIndicatorWindow)) {
                 return;
@@ -1174,14 +1282,7 @@ export class WindowHandler {
      * @param clientSwitch client switch you want to switch to.
      */
     private async switchClient(clientSwitch: ClientSwitchType): Promise<void> {
-
-        if (this.currentClient && this.currentClient === clientSwitch) {
-            logger.info(`window handler: already in the same client ${clientSwitch}. Not switching!`);
-            return;
-        }
         logger.info(`window handler: switch to client ${clientSwitch}`);
-        logger.info(`window handler: currentClient: ${this.currentClient}`);
-        this.currentClient = clientSwitch;
 
         if (!this.mainWindow || !windowExists(this.mainWindow)) {
             logger.info(`window-handler: switch client - main window web contents destroyed already! exiting`);
@@ -1195,7 +1296,7 @@ export class WindowHandler {
             const manaPath = 'client-bff';
             const manaChannel = 'daily';
             const csrfToken = await this.mainWindow.webContents.executeJavaScript(`localStorage.getItem('x-km-csrf-token')`);
-            switch (this.currentClient) {
+            switch (clientSwitch) {
                 case ClientSwitchType.CLIENT_1_5:
                     this.url = this.startUrl + `?x-km-csrf-token=${csrfToken}`;
                     break;
@@ -1208,8 +1309,7 @@ export class WindowHandler {
                 default:
                     this.url = this.globalConfig.url + `?x-km-csrf-token=${csrfToken}`;
             }
-            await config.updateUserConfig({ clientSwitch });
-            this.config.clientSwitch = clientSwitch;
+            this.execCmd(this.screenShareIndicatorFrameUtil, []);
             await this.mainWindow.loadURL(this.url);
         } catch (e) {
             logger.error(`window-handler: failed to switch client because of error ${e}`);

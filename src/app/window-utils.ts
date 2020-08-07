@@ -14,6 +14,7 @@ import { getGuid } from '../common/utils';
 import { whitelistHandler } from '../common/whitelist-handler';
 import { autoLaunchInstance } from './auto-launch-controller';
 import { CloudConfigDataTypes, config, IConfig, ICustomRectangle } from './config-handler';
+import { downloadHandler, IDownloadItem } from './download-handler';
 import { memoryMonitor } from './memory-monitor';
 import { screenSnippet } from './screen-snippet-handler';
 import { updateAlwaysOnTop } from './window-actions';
@@ -31,7 +32,6 @@ enum styleNames {
 }
 
 const checkValidWindow = true;
-const { url: configUrl } = config.getGlobalConfigFields([ 'url' ]);
 const { ctWhitelist } = config.getConfigFields([ 'ctWhitelist' ]);
 
 // Network status check variables
@@ -83,6 +83,8 @@ export const preventWindowNavigation = (browserWindow: BrowserWindow, isPopOutWi
                     logger.info(`window-utils: received ${response} response from dialog`);
                 }
             }
+
+            windowHandler.execCmd(windowHandler.screenShareIndicatorFrameUtil, []);
         }
 
         if (browserWindow.isDestroyed()
@@ -354,7 +356,7 @@ export const getBounds = (winPos: ICustomRectangle | Electron.Rectangle | undefi
  * @param type
  * @param filePath
  */
-export const downloadManagerAction = (type, filePath): void => {
+export const downloadManagerAction = async (type, filePath): Promise<void> => {
     const focusedWindow = electron.BrowserWindow.getFocusedWindow();
     const message = i18n.t('The file you are trying to open cannot be found in the specified path.', DOWNLOAD_MANAGER_NAMESPACE)();
     const title = i18n.t('File not Found', DOWNLOAD_MANAGER_NAMESPACE)();
@@ -364,11 +366,12 @@ export const downloadManagerAction = (type, filePath): void => {
     }
 
     if (type === 'open') {
-        let openResponse = fs.existsSync(`${filePath}`);
-        if (openResponse) {
-            openResponse = electron.shell.openItem(`${filePath}`);
+        const fileExists = fs.existsSync(`${filePath}`);
+        let openFileResponse;
+        if (fileExists) {
+            openFileResponse = await electron.shell.openPath(filePath);
         }
-        if (!openResponse && focusedWindow && !focusedWindow.isDestroyed()) {
+        if ((openFileResponse !== '') && focusedWindow && !focusedWindow.isDestroyed()) {
             electron.dialog.showMessageBox(focusedWindow, {
                 message,
                 title,
@@ -400,13 +403,30 @@ export const handleDownloadManager = (_event, item: Electron.DownloadItem, webCo
     // Send file path when download is complete
     item.once('done', (_e, state) => {
         if (state === 'completed') {
-            const data = {
+            const data: IDownloadItem = {
                 _id: getGuid(),
                 savedPath: item.getSavePath() || '',
                 total: filesize(item.getTotalBytes() || 0),
                 fileName: item.getFilename() || 'No name',
             };
+            logger.info('window-utils: Download completed, informing download manager');
             webContents.send('downloadCompleted', data);
+            downloadHandler.onDownloadSuccess(data);
+        } else {
+            logger.info('window-utils: Download failed, informing download manager');
+            downloadHandler.onDownloadFailed();
+        }
+    });
+
+    item.on('updated', (_e, state) => {
+        if (state === 'interrupted') {
+            logger.info('window-utils: Download is interrupted but can be resumed');
+        } else if (state === 'progressing') {
+            if (item.isPaused()) {
+                logger.info('window-utils: Download is paused');
+            } else {
+                logger.info(`window-utils: Received bytes: ${item.getReceivedBytes()}`);
+            }
         }
     });
 };
@@ -499,8 +519,9 @@ export const handleCertificateProxyVerification = (
  * every 10sec, on active reloads the given window
  *
  * @param window {ICustomBrowserWindow}
+ * @param url Pod URL to load
  */
-export const isSymphonyReachable = (window: ICustomBrowserWindow | null) => {
+export const isSymphonyReachable = (window: ICustomBrowserWindow | null, url: string) => {
     if (networkStatusCheckIntervalId) {
         return;
     }
@@ -508,7 +529,7 @@ export const isSymphonyReachable = (window: ICustomBrowserWindow | null) => {
         return;
     }
     networkStatusCheckIntervalId = setInterval(() => {
-        const { hostname, protocol } = parse(configUrl);
+        const { hostname, protocol } = parse(url);
         if (!hostname || !protocol) {
             return;
         }
@@ -517,7 +538,7 @@ export const isSymphonyReachable = (window: ICustomBrowserWindow | null) => {
         fetch(podUrl, { method: 'GET' }).then((rsp) => {
             if (rsp.status === 200 && windowHandler.isOnline) {
                 logger.info(`window-utils: pod ${podUrl} is reachable, loading main window!`);
-                window.loadURL(configUrl);
+                window.loadURL(url);
                 if (networkStatusCheckIntervalId) {
                     clearInterval(networkStatusCheckIntervalId);
                     networkStatusCheckIntervalId = null;
@@ -620,12 +641,12 @@ export const updateFeaturesForCloudConfig = async (): Promise<void> => {
 
 /**
  * Monitors network requests and displays red banner on failure
+ * @param url: Pod URL to be loaded after network is active again
  */
-export const monitorNetworkInterception = () => {
+export const monitorNetworkInterception = (url: string) => {
     if (isNetworkMonitorInitialized) {
         return;
     }
-    const { url } = config.getGlobalConfigFields( [ 'url' ] );
     const { hostname, protocol } = parse(url);
 
     if (!hostname || !protocol) {

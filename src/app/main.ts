@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, systemPreferences } from 'electron';
 import * as electronDownloader from 'electron-dl';
 import * as shellPath from 'shell-path';
 
@@ -14,6 +14,12 @@ import './main-api-handler';
 import { handlePerformanceSettings } from './perf-handler';
 import { protocolHandler } from './protocol-handler';
 import { ICustomBrowserWindow, windowHandler } from './window-handler';
+
+// Set automatic period substitution to false because of a bug in draft js on the client app
+// See https://perzoinc.atlassian.net/browse/SDA-2215 for more details
+if (isMac) {
+    systemPreferences.setUserDefault('NSAutomaticPeriodSubstitutionEnabled', 'string', 'false');
+}
 
 logger.info(`App started with the args ${JSON.stringify(process.argv)}`);
 
@@ -63,13 +69,16 @@ if (!isDevEnv) {
 /**
  * Main function that init the application
  */
+let oneStart = false;
 const startApplication = async () => {
     await app.whenReady();
-    logger.info(`main: app is ready, performing initial checks`);
-    createAppCacheFile();
-    windowHandler.createApplication();
-    logger.info(`main: created application`);
+    if (oneStart) {
+        return;
+    }
 
+    logger.info('main: app is ready, performing initial checks oneStart: ' + oneStart);
+    oneStart = true;
+    createAppCacheFile();
     if (config.isFirstTimeLaunch()) {
         logger.info(`main: This is a first time launch! will update config and handle auto launch`);
         await config.setUpFirstTimeLaunch();
@@ -77,9 +86,10 @@ const startApplication = async () => {
             await autoLaunchInstance.handleAutoLaunch();
         }
     }
-
     // Setup session properties only after app ready
     setSessionProperties();
+    await windowHandler.createApplication();
+    logger.info(`main: created application`);
 };
 
 // Handle multiple/single instances

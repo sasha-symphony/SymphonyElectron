@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webFrame } from 'electron';
+import { contextBridge, ipcRenderer, remote, webFrame } from 'electron';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { apiCmds, apiName } from '../common/api-interface';
@@ -22,6 +22,7 @@ const minMemoryFetchInterval = 4 * 60 * 60 * 1000;
 const maxMemoryFetchInterval = 12 * 60 * 60 * 1000;
 const snackBar = new SnackBar();
 const banner = new MessageBanner();
+const notification = remote.require('../renderer/notification').notification;
 
 /**
  * creates API exposed from electron.
@@ -58,6 +59,10 @@ if (ssfWindow.ssf) {
         bringToFront: ssfWindow.ssf.bringToFront,
         getVersionInfo: ssfWindow.ssf.getVersionInfo,
         registerActivityDetection: ssfWindow.ssf.registerActivityDetection,
+        registerDownloadHandler: ssfWindow.ssf.registerDownloadHandler,
+        openDownloadedItem: ssfWindow.ssf.openDownloadedItem,
+        showDownloadedItem: ssfWindow.ssf.showDownloadedItem,
+        clearDownloadedItems: ssfWindow.ssf.clearDownloadedItems,
         registerBoundsChange: ssfWindow.ssf.registerBoundsChange,
         registerLogger: ssfWindow.ssf.registerLogger,
         registerProtocolHandler: ssfWindow.ssf.registerProtocolHandler,
@@ -77,6 +82,8 @@ if (ssfWindow.ssf) {
         registerRestartFloater: ssfWindow.ssf.registerRestartFloater,
         setCloudConfig: ssfWindow.ssf.setCloudConfig,
         checkMediaPermission: ssfWindow.ssf.checkMediaPermission,
+        showNotification: notification.showNotification,
+        closeNotification: notification.hideNotification,
     });
 }
 
@@ -152,8 +159,8 @@ ipcRenderer.on('page-load', (_event, { locale, resources, enableCustomTitleBar }
 ipcRenderer.on('page-load-welcome', (_event, data) => {
     const { locale, resource } = data;
     i18n.setResource(locale, resource);
-    // Renders component as soon as the page is ready
-    document.title = i18n.t('WelcomeText', 'Welcome')();
+
+    document.title = 'Welcome';
     const styles = document.createElement('link');
     styles.rel = 'stylesheet';
     styles.type = 'text/css';

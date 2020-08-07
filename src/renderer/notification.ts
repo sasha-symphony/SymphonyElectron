@@ -4,7 +4,7 @@ import { config } from '../app/config-handler';
 import { createComponentWindow, windowExists } from '../app/window-utils';
 import { AnimationQueue } from '../common/animation-queue';
 import { apiName, INotificationData, NotificationActions } from '../common/api-interface';
-import { isNodeEnv } from '../common/env';
+import { isNodeEnv, isWindowsOS } from '../common/env';
 import { logger } from '../common/logger';
 import NotificationHandler from './notification-handler';
 
@@ -24,8 +24,8 @@ type startCorner = 'upper-right' | 'upper-left' | 'lower-right' | 'lower-left';
 const notificationSettings = {
     startCorner: 'upper-right' as startCorner,
     display: '',
-    width: 380,
-    height: 100,
+    width: 344,
+    height: 64,
     totalHeight: 0,
     totalWidth: 0,
     corner: {
@@ -38,7 +38,7 @@ const notificationSettings = {
     },
     templatePath: '',
     maxVisibleNotifications: 6,
-    borderRadius: 5,
+    borderRadius: 8,
     displayTime: 5000,
     animationSteps: 5,
     animationStepMs: 5,
@@ -192,7 +192,31 @@ class Notification extends NotificationHandler {
             notificationWindow.displayTimer = timeoutId;
         }
 
-        notificationWindow.webContents.send('notification-data', data);
+        const {
+            title,
+            company,
+            body,
+            image,
+            icon,
+            id,
+            color,
+            flash,
+            isExternal,
+            theme,
+        } = data;
+
+        notificationWindow.webContents.send('notification-data', {
+            title,
+            company,
+            body,
+            image,
+            icon,
+            id,
+            color,
+            flash,
+            isExternal,
+            theme,
+        });
         notificationWindow.showInactive();
     }
 
@@ -436,14 +460,15 @@ class Notification extends NotificationHandler {
      */
     private getNotificationOpts(): Electron.BrowserWindowConstructorOptions {
         return {
-            width: 380,
-            height: 100,
+            width: 344,
+            height: 64,
             alwaysOnTop: true,
             skipTaskbar: true,
-            resizable: true,
+            resizable: isWindowsOS,
             show: false,
             frame: false,
             transparent: true,
+            fullscreenable: false,
             acceptFirstMouse: true,
             title: 'Notification - Symphony',
             webPreferences: {

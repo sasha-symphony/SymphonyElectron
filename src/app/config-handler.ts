@@ -15,13 +15,6 @@ export enum CloudConfigDataTypes {
     ENABLED = 'ENABLED',
     DISABLED = 'DISABLED',
 }
-
-export enum ClientSwitchType {
-    CLIENT_1_5 = 'CLIENT_1_5',
-    CLIENT_2_0 = 'CLIENT_2_0',
-    CLIENT_2_0_DAILY = 'CLIENT_2_0_DAILY',
-}
-
 export interface IConfig {
     url: string;
     minimizeOnClose: CloudConfigDataTypes;
@@ -33,6 +26,7 @@ export interface IConfig {
     memoryRefresh: CloudConfigDataTypes;
     memoryThreshold: string;
     disableGpu: boolean;
+    enableRendererLogs: boolean;
     devToolsEnabled: boolean;
     ctWhitelist: string[];
     podWhitelist: string[];
@@ -44,10 +38,11 @@ export interface IConfig {
     notificationSettings: INotificationSetting;
     mainWinPos?: ICustomRectangle;
     locale?: string;
-    clientSwitch: ClientSwitchType;
+    installVariant?: string;
 }
 
 export interface IGlobalConfig {
+    contextOriginUrl: string;
     url: string;
     contextIsolation: boolean;
 }
@@ -121,7 +116,10 @@ class Config {
     public cloudConfig: ICloudConfig | {};
     public filteredCloudConfig: ICloudConfig | {};
     private isFirstTime: boolean = true;
+    private installVariant: string | undefined;
     private readonly configFileName: string;
+    private readonly installVariantFilename: string;
+    private readonly installVariantPath: string;
     private readonly userConfigPath: string;
     private readonly appPath: string;
     private readonly globalConfigPath: string;
@@ -129,6 +127,7 @@ class Config {
 
     constructor() {
         this.configFileName = 'Symphony.config';
+        this.installVariantFilename = 'InstallVariant.info';
         this.userConfigPath = path.join(app.getPath('userData'), this.configFileName);
         this.cloudConfigPath = path.join(app.getPath('userData'), 'cloudConfig.config');
         this.appPath = isDevEnv ? app.getAppPath() : path.dirname(app.getPath('exe'));
@@ -136,8 +135,13 @@ class Config {
             ? path.join(this.appPath, path.join('config', this.configFileName))
             : path.join(this.appPath, (isMac) ? '..' : '', 'config', this.configFileName);
 
+        this.installVariantPath = isDevEnv
+            ? path.join(this.appPath, path.join('config', this.installVariantFilename))
+            : path.join(this.appPath, (isMac) ? '..' : '', 'config', this.installVariantFilename);
+
         if (isLinux) {
             this.globalConfigPath = path.join(this.appPath, (isElectronQA) ? '..' : '', 'config', this.configFileName);
+            this.installVariantPath = path.join(this.appPath, (isElectronQA) ? '..' : '', 'config', this.installVariantFilename);
         }
 
         this.globalConfig = {};
@@ -146,6 +150,7 @@ class Config {
         this.filteredCloudConfig = {};
         this.readUserConfig();
         this.readGlobalConfig();
+        this.readInstallVariant();
         this.readCloudConfig();
 
         this.checkFirstTimeLaunch();
@@ -271,9 +276,11 @@ class Config {
                 ...filteredFields }: IConfig = this.userConfig as IConfig;
             // update to the new build number
             filteredFields.buildNumber = buildNumber;
+            filteredFields.installVariant = this.installVariant;
             logger.info(`config-handler: setting first time launch for build`, buildNumber);
             return await this.updateUserConfig(filteredFields);
         }
+        await this.updateUserConfig({ buildNumber, installVariant: this.installVariant });
     }
 
     /**
@@ -340,6 +347,14 @@ class Config {
     }
 
     /**
+     * Reads the install variant from a file
+     */
+    private readInstallVariant() {
+        this.installVariant = fs.readFileSync(this.installVariantPath, 'utf8');
+        logger.info(`config-handler: Install variant: `, this.installVariant);
+    }
+
+    /**
      * Reads and stores the cloud config file
      *
      * If cloud config doesn't exits?
@@ -361,20 +376,20 @@ class Config {
      */
     private async checkFirstTimeLaunch() {
         logger.info('config-handler: checking first time launch');
-        const configBuildNumber = this.userConfig && (this.userConfig as IConfig).buildNumber || null;
+        const installVariant = this.userConfig && (this.userConfig as IConfig).installVariant || null;
 
-        if (!configBuildNumber) {
-            logger.info(`config-handler: there's no build number found, this is a first time launch`);
+        if (!installVariant) {
+            logger.info(`config-handler: there's no install variant found, this is a first time launch`);
             this.isFirstTime = true;
             return;
         }
 
-        if (configBuildNumber && typeof configBuildNumber === 'string' && configBuildNumber !== buildNumber) {
-            logger.info(`config-handler: build number found is of an older build, this is a first time launch`);
+        if (installVariant && typeof installVariant === 'string' && installVariant !== this.installVariant) {
+            logger.info(`config-handler: install variant found is of a different instance, this is a first time launch`);
             this.isFirstTime = true;
             return;
         }
-        logger.info(`config-handler: build number is the same as the previous build, not a first time launch`);
+        logger.info(`config-handler: install variant is the same as the existing one, not a first time launch`);
         this.isFirstTime = false;
     }
 }

@@ -1,6 +1,7 @@
 import { ipcRenderer, remote } from 'electron';
 const os = remote.require('os');
 import { buildNumber, searchAPIVersion } from '../../package.json';
+import { IDownloadItem } from '../app/download-handler';
 import { ICustomBrowserWindow } from '../app/window-handler';
 import {
     apiCmds,
@@ -36,6 +37,7 @@ export interface ILocalObject {
     ipcRenderer;
     logger?: (msg: ILogMsg, logLevel: LogLevel, showInConsole: boolean) => void;
     activityDetectionCallback?: (arg: number) => void;
+    downloadManagerCallback?: (arg?: any) => void;
     screenSnippetCallback?: (arg: IScreenSnippet) => void;
     boundsChangeCallback?: (arg: IBoundsChange) => void;
     screenSharingIndicatorCallback?: (arg: IScreenSharingIndicator) => void;
@@ -98,6 +100,26 @@ const throttledSetCloudConfig = throttle((data) => {
     ipcRenderer.send(apiName.symphonyApi, {
         cmd: apiCmds.setCloudConfig,
         cloudConfig: data,
+    });
+}, 1000);
+
+const throttledOpenDownloadedItem = throttle((id: string) => {
+    ipcRenderer.send(apiName.symphonyApi, {
+        cmd: apiCmds.openDownloadedItem,
+        id,
+    });
+}, 1000);
+
+const throttledShowDownloadedItem = throttle((id: string) => {
+    ipcRenderer.send(apiName.symphonyApi, {
+        cmd: apiCmds.showDownloadedItem,
+        id,
+    });
+}, 1000);
+
+const throttledClearDownloadedItems = throttle(() => {
+    ipcRenderer.send(apiName.symphonyApi, {
+        cmd: apiCmds.clearDownloadedItems,
     });
 }, 1000);
 
@@ -213,6 +235,20 @@ export class SSFApi {
                 period,
             });
         }
+    }
+
+    /**
+     * Registers the download handler
+     * @param downloadManagerCallback Callback to be triggered by the download handler
+     */
+    public registerDownloadHandler(downloadManagerCallback: (arg: any) => void): void {
+        if (typeof downloadManagerCallback === 'function') {
+            local.downloadManagerCallback = downloadManagerCallback;
+        }
+
+        local.ipcRenderer.send(apiName.symphonyApi, {
+            cmd: apiCmds.registerDownloadHandler,
+        });
     }
 
     /**
@@ -488,6 +524,29 @@ export class SSFApi {
     }
 
     /**
+     * Open Downloaded item
+     * @param id ID of the item
+     */
+    public openDownloadedItem(id: string): void {
+        throttledOpenDownloadedItem(id);
+    }
+
+    /**
+     * Show downloaded item in finder / explorer
+     * @param id ID of the item
+     */
+    public showDownloadedItem(id: string): void {
+        throttledShowDownloadedItem(id);
+    }
+
+    /**
+     * Clears downloaded items
+     */
+    public clearDownloadedItems(): void {
+        throttledClearDownloadedItems();
+    }
+
+    /**
      * get CPU usage
      */
     public async getCPUUsage(): Promise<ICPUUsage> {
@@ -593,6 +652,18 @@ local.ipcRenderer.on('collect-logs', ( _event: Event ) => {
 local.ipcRenderer.on('activity', (_event: Event, idleTime: number) => {
     if (typeof idleTime === 'number' && typeof local.activityDetectionCallback === 'function') {
         local.activityDetectionCallback(idleTime);
+    }
+});
+
+local.ipcRenderer.on('download-completed', (_event: Event, downloadItem: IDownloadItem) => {
+    if (typeof downloadItem === 'object' && typeof local.downloadManagerCallback === 'function') {
+        local.downloadManagerCallback({status: 'download-completed', item: downloadItem});
+    }
+});
+
+local.ipcRenderer.on('download-failed', (_event: Event) => {
+    if (typeof local.downloadManagerCallback === 'function') {
+        local.downloadManagerCallback({status: 'download-failed'});
     }
 });
 

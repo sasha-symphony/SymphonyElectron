@@ -74,12 +74,23 @@
             <input type='checkbox' id='flash'/>
         </p>
         <p>
+            <label for='isExternal'>external:</label>
+            <input type='checkbox' id='isExternal'/>
+        </p>
+        <p>Change theme:<p>
+            <select id="select-theme" name="theme">
+                <option value="">select</option>
+                <option value="dark">dark</option>
+                <option value="light">light</option>
+            </select>
+            <br>
+        <p>
             <label for='sticky'>sticky:</label>
             <input type='checkbox' id='sticky'/>
         </p>
         <p>
             <label for='color'>color:</label>
-            <input type='text' id='color' value='white'/>
+            <input type='text' id='color' value='#FFFFFF'/>
         </p>
         <p>
             <label for='tag'>tag:</label>
@@ -95,6 +106,9 @@
         <div id="footer" class="hidden">
             <div id="download-manager-footer" class="download-bar"></div>
         </div>
+        <input type="button" id="open-download-item" value="Open Latest Item">
+        <input type="button" id="show-download-item" value="Show Latest Item in Finder">
+        <input type="button" id="close-download-manager" value="Close Download Manager">
         <br>
         <hr>
         <p>
@@ -211,6 +225,10 @@
                 sendLogs: 'send-logs',
                 registerAnalyticHandler: 'register-analytic-handler',
                 registerActivityDetection: 'register-activity-detection',
+                registerDownloadHandler: 'register-download-handler',
+                openDownloadedItem: 'open-downloaded-item',
+                showDownloadedItem: 'show-downloaded-item',
+                clearDownloadedItems: 'clear-downloaded-items',
                 showNotificationSettings: 'show-notification-settings',
                 sanitize: 'sanitize',
                 bringToFront: 'bring-to-front',
@@ -255,6 +273,7 @@
             var body = document.getElementById('body').value;
             var imageUrl = document.getElementById('image').value;
             var shouldFlash = document.getElementById('flash').checked;
+            var isExternal = document.getElementById('isExternal').checked;
             var shouldStick = document.getElementById('sticky').checked;
             var color = document.getElementById('color').value;
             var tag = document.getElementById('tag').value;
@@ -262,6 +281,7 @@
 
             num++;
 
+            var theme = document.getElementById('select-theme').value
             var notf = {
                 id: num,
                 title,
@@ -270,11 +290,12 @@
                 flash: shouldFlash,
                 color: color || 'white',
                 sticky: shouldStick,
+                isExternal: isExternal,
+                theme: theme,
                 data: {
                     hello: `Notification with id ${num} clicked')`
                 },
                 tag: tag,
-                company: company,
                 method: 'notification',
             };
 
@@ -299,6 +320,9 @@
                     alert('error=' + event.result);
                 };
                 ssfNotificationHandler.addEventListener('error', onerror);
+            } else if (window.manaSSF) {
+                const callback = () => { console.log('notification clicked') };
+                window.manaSSF.showNotification(notf, callback);
             } else {
                 window.postMessage({ method: 'notification', data: notf }, '*');
             }
@@ -539,6 +563,10 @@
                     handleResponse(data);
                     console.log(event.data);
                     break;
+                case 'download-handler-callback':
+                    onDownload(data);
+                    console.log(event.data);
+                    break;
                 default:
                     console.log(event.data);
             }
@@ -578,6 +606,21 @@
 
         function onBoundsChange(arg) {
             console.log('bounds changed for=', arg)
+        }
+
+        if (window.ssf) {
+            ssf.registerDownloadHandler(onDownload);
+        } else {
+            postMessage(apiCmds.registerDownloadHandler);
+        }
+
+        function onDownload(data) {
+            if (data && data.status === 'download-completed') {
+                downloadedItem = data.item;
+                console.log('Download completed!', data.item);
+            } else {
+                console.log('Download failed!');
+            }
         }
 
         /**
@@ -804,6 +847,7 @@
             }
         });
 
+        let downloadedItem;
         /**
          * Download Manager api handler
          */
@@ -831,7 +875,40 @@
             const filename = "bye.txt";
             const text = document.getElementById("text-val").value;
             download(filename, text);
-        }, false);
+        }, false)
+
+        document.getElementById('open-download-item').addEventListener('click', () => {
+            if (!downloadedItem) {
+                alert('No files downloaded! Try again!');
+            }
+            const id = downloadedItem.id;
+            if (window.ssf) {
+                window.ssf.openDownloadedItem(id);
+            } else {
+                postMessage(apiCmds.openDownloadedItem, id);
+            }
+        });
+
+        document.getElementById('show-download-item').addEventListener('click', () => {
+            if (!downloadedItem || downloadedItem.length < 1) {
+                alert('No files downloaded! Try again!');
+            }
+            const id = downloadedItem.id;
+            if (window.ssf) {
+                window.ssf.showDownloadedItem(id);
+            } else {
+                postMessage(apiCmds.showDownloadedItem, id);
+            }
+        });
+
+        document.getElementById('close-download-manager').addEventListener('click', () => {
+            downloadedItem = undefined;
+            if (window.ssf) {
+                window.ssf.clearDownloadedItems();
+            } else {
+                postMessage(apiCmds.clearDownloadedItems);
+            }
+        });
 
     </script>
 </html>

@@ -2,7 +2,7 @@ import { BrowserWindow, WebContents } from 'electron';
 
 import { parse as parseQuerystring } from 'querystring';
 import { format, parse, Url } from 'url';
-import { isDevEnv, isWindowsOS } from '../common/env';
+import { isWindowsOS } from '../common/env';
 import { i18n } from '../common/i18n';
 import { logger } from '../common/logger';
 import { getGuid } from '../common/utils';
@@ -17,7 +17,7 @@ import {
 import { ICustomBrowserWindow, windowHandler } from './window-handler';
 import {
     getBounds,
-    handleCertificateProxyVerification,
+    // handleCertificateProxyVerification,
     injectStyles,
     preventWindowNavigation,
 } from './window-utils';
@@ -159,7 +159,9 @@ export const handleChildWindow = (webContents: WebContents): void => {
             // Event needed to hide native menu bar
             childWebContents.once('did-start-loading', () => {
                 const browserWin = BrowserWindow.fromWebContents(childWebContents) as ICustomBrowserWindow;
-                browserWin.origin = config.getGlobalConfigFields([ 'url' ]).url;
+                const { contextOriginUrl } = config.getGlobalConfigFields([ 'contextOriginUrl' ]);
+                browserWin.setFullScreenable(true);
+                browserWin.origin = contextOriginUrl || windowHandler.url;
                 if (isWindowsOS && browserWin && !browserWin.isDestroyed()) {
                     browserWin.setMenuBarVisibility(false);
                 }
@@ -199,6 +201,25 @@ export const handleChildWindow = (webContents: WebContents): void => {
                 // Update initial bound changes
                 sendInitialBoundChanges(browserWin);
 
+                browserWin.webContents.on('console-message', (_event, level, message, _line, _sourceId) => {
+                    const { enableRendererLogs } = config.getConfigFields([ 'enableRendererLogs' ]);
+                    if (enableRendererLogs) {
+                        if (browserWin) {
+                            if (level === 0) {
+                                logger.debug('renderer ' + browserWin.title + ': ' + message);
+                            } else if (level === 1) {
+                                logger.info('renderer ' + browserWin.title + ': ' + message);
+                            } else if (level === 2) {
+                                logger.warn('renderer ' + browserWin.title + ': ' + message);
+                            } else if (level === 3) {
+                                logger.error('renderer ' + browserWin.title + ': ' + message);
+                            } else {
+                                logger.info('renderer ' + browserWin.title + ': ' + message);
+                            }
+                        }
+                    }
+                });
+
                 // Remove all attached event listeners
                 browserWin.on('close', () => {
                     logger.info(`child-window-handler: close event occurred for window with url ${newWinUrl}!`);
@@ -210,9 +231,9 @@ export const handleChildWindow = (webContents: WebContents): void => {
                     handleChildWindow(browserWin.webContents);
 
                     // Certificate verification proxy
-                    if (!isDevEnv) {
-                        browserWin.webContents.session.setCertificateVerifyProc(handleCertificateProxyVerification);
-                    }
+                    // if (!isDevEnv) {
+                    //    browserWin.webContents.session.setCertificateVerifyProc(handleCertificateProxyVerification);
+                    // }
 
                     // Updates media permissions for preload context
                     const { permissions } = config.getConfigFields([ 'permissions' ]);

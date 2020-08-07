@@ -37,7 +37,7 @@ fi
 
 if ! [ -x "$(command -v gulp)" ]; then
   echo 'Gulp does not exist! Installing it!' >&2
-  npm install -g gulp
+  npm install -g gulp gulp-cli
 fi
 
 if ! [ -x "$(command -v snyk)" ]; then
@@ -73,13 +73,15 @@ fi
 
 codesign --force --options runtime -s "Developer ID Application: Symphony Communication Services LLC" library/lz4.exec
 codesign --force --options runtime -s "Developer ID Application: Symphony Communication Services LLC" library/indexvalidator.exec
-codesign --force --options runtime -s "Developer ID Application: Symphony Communication Services LLC" node_modules/screen-share-indicator-frame/SymphonyScreenShareIndicator
 
 PKG_VERSION=$(node -e "console.log(require('./package.json').version);")
 
 # Install app dependencies
 echo "Installing dependencies"
 npm install
+
+echo "Signing screen share indicator"
+codesign --force --options runtime -s "Developer ID Application: Symphony Communication Services LLC" node_modules/screen-share-indicator-frame/SymphonyScreenShareIndicator
 
 # Run Snyk Security Tests
 echo "Running snyk security tests"
@@ -98,7 +100,7 @@ echo "Setting package version in pre install script to ${PKG_VERSION}"
 sed -i -e "s/CURRENT_VERSION=APP_VERSION/CURRENT_VERSION=${PKG_VERSION}/g" ./installer/mac/preinstall.sh
 
 # Set expiry period for TTL builds
-if [ -z "$EXPIRY_PERIOD" ]; then
+if [ "$EXPIRY_PERIOD" == "0" ] || [ "$EXPIRY_PERIOD" == 0 ]; then
   echo 'Expiry period not set, so, not creating expiry for the build'
 else
   gulp setExpiry --period ${EXPIRY_PERIOD}

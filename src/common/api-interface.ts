@@ -38,6 +38,10 @@ export enum apiCmds {
     setCloudConfig = 'set-cloud-config',
     getCPUUsage = 'get-cpu-usage',
     checkMediaPermission = 'check-media-permission',
+    registerDownloadHandler = 'register-download-handler',
+    openDownloadedItem = 'open-downloaded-item',
+    showDownloadedItem = 'show-downloaded-item',
+    clearDownloadedItems = 'clear-downloaded-items',
 }
 
 export enum apiName {
@@ -107,20 +111,25 @@ export enum KeyCodes {
     Alt = 18,
 }
 
+type Theme = '' | 'light' | 'dark';
+
 /**
  * Notification
  */
 export interface INotificationData {
     id: number;
     title: string;
-    text: string;
+    body: string;
     image: string;
+    icon: string;
     flash: boolean;
     color: string;
     tag: string;
     sticky: boolean;
     company: string;
     displayTime: number;
+    isExternal: boolean;
+    theme: Theme;
 }
 
 export enum NotificationActions {
@@ -149,6 +158,16 @@ export interface IVersionInfo {
 export interface ICPUUsage {
     percentCPUUsage: number;
     idleWakeupsPerSecond: number;
+}
+
+export interface IDownloadManager {
+    _id: string;
+    fileName: string;
+    fileDisplayName: string;
+    savedPath: string;
+    total: number;
+    flashing?: boolean;
+    count?: number;
 }
 
 export interface IMediaPermission {
