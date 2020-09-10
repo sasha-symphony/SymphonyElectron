@@ -42,6 +42,7 @@ export enum apiCmds {
     openDownloadedItem = 'open-downloaded-item',
     showDownloadedItem = 'show-downloaded-item',
     clearDownloadedItems = 'clear-downloaded-items',
+    restartApp = 'restart-app',
 }
 
 export enum apiName {
@@ -49,6 +50,8 @@ export enum apiName {
     mainWindowName = 'main',
     notificationWindowName = 'notification-window',
 }
+
+export const NOTIFICATION_WINDOW_TITLE = 'Notification - Symphony';
 
 export interface IApiArgs {
     memoryInfo: Electron.ProcessMemoryInfo;
